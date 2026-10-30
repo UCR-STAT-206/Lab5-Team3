@@ -1,0 +1,260 @@
+---
+title: "Homework 3"
+author: "Alexis Fernandes"
+engine: julia
+execute: 
+  cache: true
+---
+# Problem 1
+
+## Problem 1.1
+Each row of X represents a single image, or an individual face. 
+
+## Problem 1.2
+Each column of x represents a single pixel position across all images.
+
+## Problem 1.3
+Matrix V encodes the original images. Since X has m images as rows, matrix V retains m rows, where each row contains the r coefficients corresponding to that specific image.
+
+## Problem 1.4
+Matrix W is the mapping system. Because X contains images in a row and V preserves them, creating an image requires a combination of the vectors in W using values in V.
+
+## Problem 1.5
+For $50,000$ images of size $128 \times 128$, there are $16,384$ pixels per image. Storing that uncompressed matrix X  which is $50,000 \times 16,384$ in Float64 precision, we have $819.2$ million elements, which equals approximately $819,200,000 \times 8$ or $6.554$ GB. If we have rank 1000 matrices like Matrix V and W,then we get $1,000 \times 16,384$ and $50,000 \times 1,000$ and together they require only $66.384$ million elements, or approximately $0.531$ GB. Consequently, using NMF reduces storage by $6.023$.
+
+# Problem 2
+
+```{julia}
+using Random
+using LinearAlgebra
+
+function nnmf(
+  # Positional arguments
+  X       :: Matrix{T}, # matrix with all original faces
+  r       :: Integer;
+  # Keyword arguments
+  maxiter :: Integer = 1000, 
+  tolfun  :: Real = 1e-4,
+  V       :: Matrix{T} = Random.rand!(similar(X, size(X, 1), r)),
+  W       :: Matrix{T} = Random.rand!(similar(X, r, size(X, 2))),
+  ) where T <: AbstractFloat
+  # TODO: Implementation!!!
+
+   nrows, ncols = size(X)
+   
+    ## allocate matrix B 
+    B = Matrix{T}(undef, nrows, ncols)
+    mul!(B, V, W)
+
+    ## to reduce allocations when performing calculations inside for loop
+    nV = Matrix{T}(undef, nrows, r) ## numerator fro V
+    dV = Matrix{T}(undef, nrows, r) ## denominator for V
+    nW = Matrix{T}(undef, r, ncols) ## for W
+    dW = Matrix{T}(undef, r, ncols) ## for W
+
+    ## Pre-calculate squared Frobenius norm of X for fast objective updates
+    sq_norm_X = sum(abs2, X)
+    obj = sq_norm_X - 2 * dot(X, B) + sum(abs2, B)
+
+  # TODO: Evaluate objective at starting point
+    converged = false
+    niter = maxiter
+
+  # TODO: Loop
+  for iter in 1:maxiter
+    obj_old = obj
+    
+    
+    ## Calculating and updating V
+    mul!(nV, X, W')
+    mul!(dV, B, W')
+    
+    V .= V .* nV ./ (dV) ## final computing of V
+
+    mul!(B, V, W)
+  
+
+  ## use updates from ^ to update W now as well
+    mul!(nW, V', X)
+    mul!(dW, V', B)
+   
+   
+  ## computing W
+    W .= W .* nW ./ (dW) 
+
+  ## updating B
+    mul!(B, V, W) 
+
+    # Update objective
+    obj = sq_norm_X + sum(abs2, B) - 2 * dot(X, B)
+
+    # convergence check, stop if change in objective function falls below specified tolerance
+    if abs(obj - obj_old) < tolfun * (abs(obj_old) + 1)
+      converged = true
+      niter = iter
+      break
+    end
+  end
+
+  # Output: Formatted as a NamedTuple
+  result = (;
+    V=V,
+    W=W,
+    r=r,
+    converged= converged,    # TODO: did the algorithm converge? 
+    objective=obj,  # TODO: what is the objective at the end?
+    iterations=niter        # TODO: how many iterations were taken?
+  )
+  return result
+end
+```
+
+# Problem 3
+```{julia}
+using DelimitedFiles
+using Images
+cd(@__DIR__) ## used this because typing in directory to load text files didnt work
+
+X = readdlm("nnmf-2429-by-361-face.txt", ' ', Float64)
+
+pic1 = Gray.(reshape(X[7, :], 19, 19)')
+pic2 = Gray.(reshape(X[8, :], 19, 19)')
+pic3 = Gray.(reshape(X[9, :], 19, 19)')
+
+## using mosaic because  trying to render each picture individually is causing performance issues
+mosaic([pic1, pic2, pic3], nrow = 1, npad = 2, fillvalue = Gray(1.0))
+```
+
+
+
+# Problem 4
+
+```{julia}
+using DelimitedFiles
+using BenchmarkTools
+using LinearAlgebra
+cd(@__DIR__)
+
+
+X = readdlm("nnmf-2429-by-361-face.txt", ' ', Float64)
+V0full = readdlm("V0.txt", ' ', Float64)
+W0full = readdlm("W0.txt", ' ', Float64);
+
+## loop for benchmark
+for r in [10, 20, 30, 40, 50]
+    println("rank = $r")
+
+    ## call function and store in result
+    result = nnmf(X, r, V = copy((V0full[:, 1:r])), W = copy((W0full[1:r, :])))
+    
+    ## Benchmark execution time and memory using copies
+    @btime nnmf($X, $r, V = V0, W = W0) setup=(
+        V0 = copy($(V0full[:, 1:r]));
+        W0 = copy($(W0full[1:r, :]));
+    )
+    
+    ## print results
+    print("""
+            obj = $(result.objective)
+          niter = $(result.iterations)
+      converged = $(result.converged)
+    -------------------------------------
+    """)
+end
+
+GC.gc()
+```
+
+# Problem 5
+
+```{julia}
+using Random
+using LinearAlgebra
+
+r = 30
+
+## Original 
+or = nnmf(X, r)
+
+## Random function run
+Random.seed!(42) 
+V_random = rand(size(X, 1), r)
+W_random = rand(r, size(X, 2))
+
+
+ar = nnmf(X, r; V = copy(V_random), W = copy(W_random))
+
+
+##3. Print 
+println("""
+Original Objective: $(or.objective)
+Alt Final Objective: $(ar.objective)
+V Difference: $(norm(or.V .- ar.V)) 
+W Difference: $(norm(or.W .- ar.W)) 
+-------------------------------------
+""")
+```
+
+No, we do not obtain the same objective value, but the values are quite close in difference. The objective function most likely converged to a lower minimum depending on the initial values, which is why the random objective vlaue is lower than the original.
+
+# Problem 6
+
+```{julia}
+# Same rank as Problem 5
+r = 30
+
+# All-ones starting poin
+
+m, n = size(X)
+V_ones = ones(m, r)
+W_ones = ones(r, n)
+
+# 2. Run NNMF starting from all-ones matrices
+rone = nnmf(X, r; V = copy(V_ones), W = copy(W_ones))
+
+# 3. Check if all rows of W (or columns of V) remain identical
+println("""
+Original Objective: $(or.objective)
+Ones Final Objective: $(rone.objective)
+V Difference: $(norm(or.V .- rone.V))
+W Difference: $(norm(or.W.- rone.W))
+-------------------------------------
+""")
+```
+
+The original run and the run with all 1s gives vastly different outcomes. The differences in V and W show that with every value starting at 1, the algorithm wasn't able to create different features. 
+
+# Problem 7
+
+```{julia}
+using Plots, Images
+
+## Setting rank to 50
+r = 50
+
+res50 = nnmf(X, r; V = copy(V0full[:, 1:r]), W = copy(W0full[1:r, :]))
+
+## Converting rows of W to 19x19 image matrices
+imgs = [Gray.(reshape(res50.W[k, :], 19, 19)') for k in 1:r]
+
+## Adding spacing between every image tile so its not all combines
+tiled_img = copy(mosaic(imgs, ncol = 10, npad = 2, fillvalue = Gray(1.0)))
+
+# 3. Render at a higher resolution
+plot(tiled_img, ticks = false, border = :none, size = (1600, 800))
+```
+
+The plot displays 50 images which are quite blurry. In some images, facial features are more visible, but in others, its hard to decipher what the photo is of.
+
+# Environment
+```{julia}
+using Pkg
+Pkg.status()
+```
+
+
+```{julia}
+using InteractiveUtils
+versioninfo()
+```
+
