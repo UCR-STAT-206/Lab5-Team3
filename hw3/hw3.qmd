@@ -1,0 +1,253 @@
+---
+title: "Homework 3"
+author: "Ian Abrash"
+date: "2026-10-19"
+engine: julia
+echo: true
+execute:
+  cache: true
+format:
+  html:
+     toc: true
+     toc-location: left
+     embed-resources: true
+     code-line-numbers: true
+editor: 
+  mode: source
+---
+
+```{julia}
+#| label: setup
+
+using DelimitedFiles
+using BenchmarkTools
+using Random
+using LinearAlgebra
+using Images
+```
+
+# Problem 1
+
+ 1. The rows of $X$ represents in Figure 1, the one single facial image.
+ 2. The columns of $X$ represents in Figure 1, the non-negative pixel values that make up each image.
+ 3. The matrix $V$ would encode the original images.
+ 4. The matrix $W$ would then represent the 'dictionary', 'mapping', or 'coordinate system' that helps us approximate the original image from its compressed representation.
+ 5. The original memory space would be calculated by $$50000 \texttt{(m)} \times (128 \times 128) \text{(n)} = 81920000 \times 8 \texttt{ bytes} = 6553600000 \texttt{ bytes.}$$ The memory associated with *NNMF*, is Matrix $$V = 50000 \texttt{(m)} \times 1000 \texttt{(r)}) = 50000000$$ and Matrix $$W = 1000 \texttt{(r)} \times (128 \times 128) \texttt{(n)} = 16384000$$ which the summation is $$V + W = 50000000 + 16384000 = 66384000 \times 8 \texttt{ bytes} = 531072000 \texttt{ bytes.}$$ Which leads to $6022528000 \texttt{ bytes}$ of memory saved with *NNMF*.
+
+ # Problem 2
+
+ ```{julia}
+ function nnmf(
+  # Positional arguments
+  X       :: Matrix{T}, 
+  r       :: Integer;
+  # Keyword arguments
+  maxiter :: Integer = 1000, 
+  tolfun  :: Real = 1e-4,
+  V       :: Matrix{T} = Random.rand!(similar(X, size(X, 1), r)),
+  W       :: Matrix{T} = Random.rand!(similar(X, r, size(X, 2))),
+  ) where T <: AbstractFloat
+  # TODO: Implementation!!!
+  # TODO: Evaluate objective at starting point
+  # TODO: Loop
+  converge = false
+  niter = maxiter
+
+  n, m = size(X)
+  r_r = similar(X, r, r)
+
+  V_num = similar(X, n, r)
+  V_denom = similar(X, n, r)
+
+  W_num = similar(X, r, m)
+  W_denom = similar(X, r, m)
+
+  X_norm = sum(abs2, X)
+
+  mul!(r_r, V', V)
+  mul!(W_num, V', X)
+  mul!(W_denom, r_r, W)
+
+  obj = X_norm - 2 * dot(W_num, W) + dot(W, W_denom)
+
+
+  for iter in 1:maxiter
+
+    obj_old = obj
+    # Update V
+
+    mul!(r_r, W, W')
+    mul!(V_num, X, W')
+    mul!(V_denom, V, r_r)
+    @. V = V * V_num / V_denom
+    # Update W
+    mul!(r_r, V', V)
+    mul!(W_num, V', X)
+    mul!(W_denom, r_r, W)
+    @. W = W * W_num / W_denom
+    # Update objective
+
+    mul!(W_denom, r_r, W)
+    obj = X_norm - 2 * dot(W_num, W) + dot(W, W_denom)
+    # convergence check
+    if abs(obj - obj_old) < tolfun * (abs(obj_old) + 1)
+      niter = iter
+      converge = true
+      break
+    end
+  end
+  # Output: Formatted as a NamedTuple
+  result = (;
+    V=V,
+    W=W,
+    r=r,
+    converged=converge,    # TODO: did the algorithm converge? 
+    objective=obj,  # TODO: what is the objective at the end?
+    iterations= niter       # TODO: how many iterations were taken?
+  )
+  return result
+end
+ ```
+
+ # Problem 3
+
+
+```{julia}
+X = readdlm("/home/student/work/hw3/nnmf-2429-by-361-face.txt", Float64);
+```
+
+```{julia}
+function row_to_image(X, row_index)
+  # Select image at row index
+  row = X[row_index, :]
+  # Reshpes the image into a 19 x 19 matrix
+  img_mat = reshape(row, 19, 19)
+  # Returns the image
+  return Gray.(img_mat)
+end
+```
+
+
+```{julia}
+img1 = row_to_image(X, 1);
+display(img1)
+
+img2 = row_to_image(X, 100);
+display(img2)
+```
+
+# Problem 4
+
+
+```{julia}
+V0full = readdlm("/home/student/work/hw3/V0.txt", Float64)
+W0full = readdlm("/home/student/work/hw3/W0.txt", Float64)
+
+for r in [10, 20, 30, 40, 50]
+  println("rank = $r")
+  V0 = V0full[:, 1:r]
+  W0 = W0full[1:r, :]
+  result = nnmf(X, r, V = V0, W = W0)
+  @btime nnmf($X, $r, V = V0, W = W0) setup = (
+    V0 = $(V0full[:, 1:r]);
+    W0 = $(W0full[1:r, :]);
+  )
+  print("""
+          obj = $(result.objective)
+          niter = $(result.iterations)
+          converged = $(result.converged)
+  """)
+end
+```
+
+# Problem 5
+
+
+```{julia}
+r = 20 
+
+result1 = nnmf(X, r, 
+  V = copy(V0full[:, 1:r]), 
+  W = copy(W0full[1:r, :])
+);
+
+V2 = rand(Float64, size(X, 1), r)
+W2 = rand(Float64, r, size(X, 2))
+
+result2 = nnmf(
+  X, r, 
+  V = V2,
+  W = W2
+);
+
+println(
+  "Initial Objective: ", result1.objective
+)
+println(
+  "Random Objective ", result2.objective 
+)
+println(first(result1.V, 5))
+println(first(result2.V, 5))
+
+
+println(first(result1.W, 5))
+println(first(result2.W, 5))
+
+```
+
+Running the inital $V_0$ and $W_0$ does not produce the same objective values. We get values that are close relatively, but do not give us the same minima. Similarlly, the V and W matricies are also different as the columns of V and rows of W can be different but still have a similar product.
+
+# Problem 6
+
+
+```{julia}
+r = 20
+
+V_ones = ones(Float64, size(X, 1), r)
+W_ones = ones(Float64, r, size(X, 2))
+
+results_ones = nnmf(X, r, V = V_ones, W = W_ones)
+
+println(
+  "Objective with all ones: ", results_ones.objective
+)
+println(first(results_ones.V, 5))
+println(first(results_ones.W, 5))
+```
+
+No we do not obtain the same objective value when we use a matrix of all ones for V and W. However, since we use all identical value for V and W it takes longer to converge, and gives us a worse objective than our other matricies. 
+
+# Problem 7
+
+
+```{julia}
+r = 50
+
+results_50 = nnmf(
+  X, r,
+  V = copy(V0full[:, 1:r]),
+  W = copy(W0full[1:r, :])
+)
+
+for k in 1:50
+  display(Gray.(reshape(results_50.W[k, :], 19, 19)))
+end
+
+```
+
+We find that the rows of W represent the face-like basis images. The images shown represents the features of the images such as to where they are located such as the eyes, mouth, and cheeks for example. As the W matrix represents a 'dictionary' for the X matrix. We see that the basis image represents that.
+
+# Environment
+
+
+```{julia}
+using Pkg
+Pkg.activate("/home/student/work/hw3/")
+Pkg.status()
+```
+
+
+```{julia}
+using InteractiveUtils
+versioninfo()
+```
