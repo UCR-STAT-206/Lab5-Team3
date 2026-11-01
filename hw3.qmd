@@ -1,0 +1,210 @@
+---
+title: "Hw3"
+author: "Kaylin Kielty"
+date: "10/6/26"
+format: html
+engine: julia
+---
+# Problem 1
+1. X represents a single face image, where the data is stored in a matrix with rows amd columns.
+2. The column of X represents a pixel in the grayscale face image. 
+3. V encodes the face images because there are pieces of the original image in it.
+4. W is the dictionary of the face images because it is the basis of the original image. 
+5. First, calculate the memory required to store the original image. 8mn with m=50000 and n=128x128
+8(50000)(128*128) = 6553600000 bytes. 
+
+Then, we must find the memory required using the matrice equation. 
+(V,W)= 8(mr+rn) with r being the rank of the matrix. 
+8((50000*1000)+((128*128)*1000)) = 
+53107200 bytes. 
+
+Then, we must subtract the memory of original image by memory required. 
+6553600000 - 53107200 = 531072000 bytes. 
+
+# Problem 2
+```{julia}
+function nnmf(
+  # Positional arguments
+  X       :: Matrix{T}, 
+  r       :: Integer;
+  # Keyword arguments
+  maxiter :: Integer = 1000, 
+  tolfun  :: Real = 1e-4,
+  V       :: Matrix{T} = Random.rand!(similar(X, size(X, 1), r)),
+  W       :: Matrix{T} = Random.rand!(similar(X, r, size(X, 2))),
+  ) where T <: AbstractFloat
+  # TODO: Implementation!!!
+  coverage = false 
+  niter = maxiter
+  # TODO: Evaluate objective at starting point
+  R = X - V * W
+    obj = sum(abs2, R)
+  # TODO: Loop
+
+  for iter in 1:maxiter
+   obj_old = obj
+    # Update V
+    V .*= (X * W') ./ (V * (W * W'))
+    # Update W
+    W .*= (V' * X) ./ ((V' * V) * W)
+    # Update objective
+    R. = X.- V * W
+    obj = sum(abs2, R)
+    # convergence check
+    if abs(obj - obj_old) < tolfun * (abs(obj_old) + 1)
+      niter = iter
+      break
+    end
+  end
+  # Output: Formatted as a NamedTuple
+  result = (;
+    V=V,
+    W=W,
+    r=r,
+    converged=converged,    # TODO: did the algorithm converge? 
+    objective=obj,  # TODO: what is the objective at the end?
+    iterations=niter       # TODO: how many iterations were taken?
+  )
+  return result
+end
+```
+
+# Problem 3
+```{julia}
+using DelimitedFiles
+using Images
+
+#read the file
+X = readdlm("/home/student/work/hw_3/nnmf-2429-by-361-face.txt")
+mydata = X
+#create some faces and create image 
+image1 = reshape(mydata[1, :], 19, 19)
+Gray.(image1)
+image2 = reshape(mydata[2, :], 19, 19)
+Gray.(image2)
+```
+# Problem 4
+```{julia}
+using DelimitedFiles
+using BenchmarkTools
+using NMF  
+
+#load the data
+dataSetPath = "/home/student/work/hw_3"
+
+# Provided data and starting points
+X = readdlm("$dataSetPath/nnmf-2429-by-361-face.txt")
+V0full = readdlm("$dataSetPath/V0.txt", ' ', Float64)
+W0full = readdlm("$dataSetPath/W0.txt", ' ', Float64)
+
+# Benchmarking
+for r in [10, 20, 30, 40, 50]
+    println("rank = $r")
+    
+    V0 = V0full[:, 1:r]
+    W0_mat = W0full[1:r, :]
+    
+    # Use W0, H0
+    result = nnmf(X, r, W0 = copy(V0), H0 = copy(W0_mat), init = :custom)
+    
+    # Benchmark using NMF
+    @btime nnmf($X, $r, W0 = $(V0full[:, 1:r]), H0 = $(W0full[1:r, :]), init = :custom) setup=(
+        V0 = $(V0full[:, 1:r]);
+        W0 = $(W0full[1:r, :]);
+    ) evals=1
+    
+    
+    print("""
+               obj = $(result.objvalue)
+             niter = $(result.niters)
+         converged = $(result.converged)
+         -------------------------------------
+         """)
+end
+```
+
+
+# Problem 5
+```{julia}
+using DelimitedFiles
+using BenchmarkTools
+using NMF
+
+#load the data
+dataSetPath = "/home/student/work/hw_3"
+
+#load data and original starting points
+X = readdlm("$dataSetPath/nnmf-2429-by-361-face.txt")
+V0full = readdlm("$dataSetPath/V0.txt", ' ', Float64)
+W0full = readdlm("$dataSetPath/W0.txt", ' ', Float64)
+
+# Choose a rank r
+r = 20
+ # Use W0, H0
+V0_orig = V0full[:, 1:r]
+W0_orig = W0full[1:r, :]
+result= nnmf(X, r, W0 = V0_orig, H0 = W0_orig, init = :custom)
+
+#using a different starting point
+m, n = size(X)
+V0_diff = rand(m, r)
+W0_diff = rand(r, n)
+result_new = nnmf(X, r, W0 = V0_diff, H0 = W0_diff, init = :custom)
+
+#compare results
+println("First: $(result.objvalue)")
+println("Second: $(result_new.objvalue)")
+
+```
+The objective values are close, but they are not the same. This is because the starting points are different, which can cause a different local minima. 
+
+# Problem 6
+```{julia}
+using DelimitedFiles
+using BenchmarkTools
+using NMF
+
+dataSetPath = "/home/student/work/hw_3"
+X = readdlm("$dataSetPath/nnmf-2429-by-361-face.txt")
+
+#choosing the same r as last question 
+r = 20
+m, n = size(X)
+
+#making vik(0) and wkj(0)=1 for all i,j,k
+V0_ones = ones(m, r)
+W0_ones = ones(r, n)
+
+result_ones = nnmf(X, r, W0 = V0_ones, H0 = W0_ones, init = :custom)
+
+println("Result: $(result_ones.objvalue)")
+```
+This gives us a very large objective value compared to the other results. 
+# Problem 7 
+```{julia}
+using DelimitedFiles
+using Images
+using NMF
+
+# load files
+dataSetPath = "/home/student/work/hw_3"
+
+# load data and starting points 
+X = readdlm("$dataSetPath/nnmf-2429-by-361-face.txt")
+V0full = readdlm("$dataSetPath/V0.txt", ' ', Float64)
+W0full = readdlm("$dataSetPath/W0.txt", ' ', Float64)
+
+# use the rank of 50
+r = 50
+V0 = V0full[:, 1:r]
+W0 = W0full[1:r, :]
+
+fifty = nnmf(X, r, W0 = copy(V0), H0 = copy(W0), init = :custom)
+Basis = fifty.H
+
+# make the basis of images 
+Images_made = [Gray.(reshape(Basis[k, :] ./ maximum(Basis[k, :]), 19, 19)) for k in 1:50]
+grid_rows = [hcat(Images_made[(i-1)*10 + 1 : i*10]...) for i in 1:5]
+vcat(grid_rows...)
+```
+The image has a bunch of faces, but they are super distorted to the pint where you cant even see the face. There is just dark parts in the images with little bits of light. This is because the rank is too high. 
