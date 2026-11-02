@@ -1,0 +1,265 @@
+---
+title: "Homework 3"
+author: "Xinyi Cen"
+format: html
+engine: julia
+---
+
+# Problem 1
+1. Each row represents one face image.
+2. Each column represents one pixel position.
+3. **V** encodes the orignial images: each of row of **V** contains the **r** weights describing one image as a mixture of the shared patterns stored in **W**.
+4. **W** represents the dictonary, since it stores the patterns that give meaning to the weights in **V**.
+5. Each image has 16384 (by $128 \times 128$) pixels. Then **X** matrix has memory of 6553600000 (by $50000 \times 16384 \times 8$) bytes. **V** matrix has memory of 400000000 (by $50000 \times 1000 \times 8$) bytes. **W** matrix has memory of 131072000 (by $1000 \times 16384 \times 8$) bytes. The NMF uses 531072000 (by $400000000+131072000$) bytes. The memory saving with NMF is 6022528000 (by $6553600000-531072000$) bytes. (around 91.9 percent is saved)
+
+# Problem 2
+- The updated V should be:
+$$
+v_{ik}^{(t+1)} = v_{ik}^{(t)} \frac{\sum_j x_{ij}w_{kj}^{(t)}}{\sum_j b_{ij}^{(t)}w_{kj}^{(t)}} = V^{(t)} \odot \frac{X(W^{(t)})^\top}{(V^{(t)}W^{(t)})(W^{(t)})^\top}
+$$
+
+- The updated W should be:
+$$
+w_{kj}^{(t+1)}=w_{kj}^{(t)}\frac{\sum_i x_{ij} v_{ik}^{(t+1)}}{\sum_i b_{ij}^{(t+1/2)} v_{ik}^{(t+1)}} = W^{(t)} \odot \frac{(V^{(t+1)})^\top X}{(V^{(t+1)})^\top (V^{(t+1)}W^{(t)})}
+$$
+
+```{julia}
+using Random, LinearAlgebra
+
+function nnmf(
+  # Positional arguments
+  X       :: Matrix{T}, 
+  r       :: Integer;
+  # Keyword arguments
+  maxiter :: Integer = 1000, 
+  tolfun  :: Real = 1e-4,
+  V       :: Matrix{T} = Random.rand!(similar(X, size(X, 1), r)),
+  W       :: Matrix{T} = Random.rand!(similar(X, r, size(X, 2))),
+  ) where T <: AbstractFloat
+
+    ### Allocate storage once: use similar() create an empty workspace with same element type
+    B = similar(X)      # Store the V * W
+    num_V = similar(V)  # Store X * transpose W
+    deno_V = similar(V) # Store (V*W) * transpose W
+    num_W = similar(W)  # Store transpose V * X
+    deno_W = similar(W) # Store transpose V * (V*W)
+  
+    ### L(V,W) Original object
+    # put V*W into the exsiting matrix B
+    mul!(B,V,W)  
+    # acculate squared difference without creating a residual matrix
+    obj = zero(T)
+    # @inbounds skips bounds check, eachindex visits every entry
+    @inbounds for i in eachindex(X,B)
+        obj += abs2(X[i]-B[i])
+    end
+
+
+  ### Stop status and number of interations
+  conv = false
+  niter = 0
+
+  for iter in 1:maxiter
+    ### Record the original object
+    obj_old = obj
+
+    ### Update V suing current W and B
+    # V .*= (X*transpose(W)) ./ ((V*W)*transpose(W))
+    mul!(num_V, X, transpose(W))
+    mul!(deno_V, B, transpose(W))
+        @. V *= num_V/deno_V
+
+    # Recompute V*W  using updated V
+    mul!(B, V, W)
+
+    ### Update W using updated V
+    # W .*= (transpose(V)*X) ./ (transpose(V)*(V*W))
+    mul!(num_W, transpose(V), X)
+    mul!(deno_W, transpose(V), B)
+    @. W *= num_W/deno_W
+
+    ### Update objects with updated W and V
+    mul!(B,V,W)
+    obj = zero(T)   # reset object before calculate current error
+    @inbounds for i in eachindex(X,B)
+        obj += abs2(X[i]-B[i])
+    end
+
+
+    ### record every iteration
+    niter = iter
+
+    # convergence check
+    if abs(obj - obj_old) < tolfun * (abs(obj_old) + 1)
+        conv = true
+        break
+    end
+  end
+
+  # Output: Formatted as a NamedTuple
+  result = (;
+    V=V,
+    W=W,
+    r=r,
+    converged=conv,    # TODO: did the algorithm converge? 
+    objective=obj,  # TODO: what is the objective at the end?
+    iterations=niter       # TODO: how many iterations were taken?
+  )
+  return result
+end
+```
+
+# Problem 3
+```{julia}
+# Loading the package
+# using Pkg
+# Pkg.activate(".")
+# Pkg.add("Images")
+
+# Load use package
+using DelimitedFiles, Images
+
+# Set direction
+cd(expanduser("~/work/hw3"))
+
+# Load data
+X = readdlm("nnmf-2429-by-361-face.txt", Float64)
+
+# Check the size
+# There are 2429 faces, each represent by 361 pixel
+size(X)
+
+# Display sample faces (check the first 5)
+fc=[]
+
+for i in 1:5
+    face = reshape(X[i, :],19,19)
+    push!(fc,Gray.(face))
+end
+
+display(hcat(fc...))
+```
+
+
+# Problem 4
+```{julia}
+using DelimitedFiles, BenchmarkTools
+
+# Set direction
+cd(expanduser("~/work/hw3"))
+
+# provided start point
+V0full = readdlm("V0.txt", ' ', Float64)
+W0full = readdlm("W0.txt", ' ', Float64);
+
+# benchmarking
+for r in [10, 20, 30, 40, 50]
+    println("rank = $r")
+
+    # We use V0, W0 to record the starting point for each rank
+    V0 = V0full[:, 1:r]
+    W0 = W0full[1:r, :]
+
+    # applying nnmf function to the current dataset
+    result = nnmf(X, r, V = V0, W = W0,tolfun=1e-4)
+
+    # reset the starting matrices before each benchmark
+    @btime nnmf($X, $r, V = V0, W = W0) setup=(
+        V0 = $(V0full[:, 1:r]);
+        W0 = $(W0full[1:r, :]);
+    ) evals=1
+
+    print("""
+            obj = $(result.objective)
+            niter = $(result.iterations)
+        converged = $(result.converged)
+    -------------------------------------
+    """)
+end
+```
+
+# Problem 5
+
+I choose $r=10$. The result shows that the $V$ and $W$ are different, same for the objective result (different). But both fittings coverged. Thus, random starting points will lead to different results. (random start error is slightly smaller than original start)
+
+```{julia}
+### Fit with orignial V and W, we choose r=10
+r=10
+# V0full and W0full matrices are defined from problem 4
+# V0full = readdlm("V0.txt", ' ', Float64)
+# W0full = readdlm("W0.txt", ' ', Float64);
+fit = nnmf(X, r; V=V0full[:, 1:r], W=W0full[1:r, :], tolfun=1e-4)
+
+### Fit with different matrix
+# Create new random start matrice with V: m x r dimensions, W: r x n dimentsions
+using Random
+Random.seed!(345)
+fit1 = nnmf(X, r; 
+        V=rand(size(X,1),r), W=rand(r,size(X,2)), 
+        tolfun = 1e-4)
+
+println("Provided start object is ", fit.objective)
+println("Random matrices start object is ", fit1.objective)
+println("Converage or not for provdied fit? ", fit.converged)
+println("Converage or not for random matrice fit? ", fit1.converged)
+println("--------------------------------------------")
+println("V approximate equal?  ", isapprox(fit.V,fit1.V))
+println("W approximate equal?  ", isapprox(fit.W,fit1.W))
+```
+
+# Problem 6
+
+The result shows that the $V$ and $W$ are different, same for the objective result (different). But both fittings coverged. Thus, starting with all ones matrices keeps the components identical during the process (the updates preserve this pattern), so `nnmf` only learn on ecomponent and gives a worse fit (larger error).
+
+```{julia}
+### still using r=10
+r=10
+
+fit2 = nnmf(X, r;
+        V = ones(size(X,1),r),
+        W = ones(r, size(X,2)),
+        tolfun = 1e-4)
+
+println("Provided start object is ", fit.objective)
+println("Fixed point start object is ", fit2.objective)
+println("Converage or not for provdied fit? ", fit.converged)
+println("Converage or not for fixed point fit? ", fit2.converged)
+println("--------------------------------------------")
+println("V approximate equal?  ", isapprox(fit.V,fit2.V))
+println("W approximate equal?  ", isapprox(fit.W,fit2.W))
+```
+
+# Problem 7
+
+The basis images show partial face such as eyes, noses, and mouths rather than the entire face. `nnmf` combines these parts reconstruct each face.
+
+```{julia}
+### Load needed package
+# Loading the package
+using Plots
+
+### Fitting nnmf process
+# define r
+r = 50
+fit3 = nnmf(X, r; V=V0full[:, 1:r], W=W0full[1:r, :], tolfun=1e-4)
+
+### Plot the basis image
+# use original images dimensions 19 x 19 here
+p = [
+        heatmap(reshape(fit3.W[i, :],19,19);
+                color = :grays,
+                yflip = true,
+                aspect_ratio = :equal,
+                axis = false,
+                ticks = false,
+                colorbar = false,
+                title = "$i",)
+    for i in 1:r
+]
+
+fig = plot(p...; layout=(5,10), size=(1200,650))
+
+# save the image since it's big
+# savefig(fig,"Problem_7.png")
+
+```
